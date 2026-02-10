@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import math
 import random
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
-from models import Bid, Action, PlayerState, GameState, RoundResult, RoundBid
-from agents import Agent
+from models import Action, Agent, Bid, GameState, PlayerState, RoundBid, RoundResult
 
 
 class LiarDiceEngine:
@@ -25,9 +25,9 @@ class LiarDiceEngine:
 		self.agents: List[Agent] = []
 		self.state: Optional[GameState] = None
 		# Optional event listeners: functions receiving (event: str, payload: dict)
-		self._listeners: List[callable] = []
+		self._listeners: List[Callable] = []
 
-	def register_listener(self, listener: callable) -> None:
+	def register_listener(self, listener: Callable) -> None:
 		self._listeners.append(listener)
 
 	def _emit(self, event: str, **payload) -> None:
@@ -110,50 +110,39 @@ class LiarDiceEngine:
 		self.state.game_history.append(rb)
 		self._emit("bid", player=self.state.players[idx].name, quantity=bid.quantity, face=bid.face)
 
-	def legal_actions(self) -> List[Action]:
+	def is_action_legal(self, action: Action) -> bool:
 		assert self.state is not None
-		actions: List[Action] = []
 		total = self.state.total_dice_in_play()
-
-		# Generate all strictly higher bids
-		def is_higher(b: Bid) -> bool:
-			cur = self.state.current_bid
+		cur = self.state.current_bid
+		# Bid legality
+		if action.kind == 'bid':
+			b = action.bid
+			if b is None:
+				return False
+			if not (1 <= b.face <= self.faces and 1 <= b.quantity <= total):
+				return False
 			if cur is None:
 				return True
-			
-			# Special rules for wild ones games
+			# Wild ones rules
 			if self.wild_ones:
-				# Bidding on ones: can halve the current quantity (rounded up)
 				if b.face == 1:
 					if cur.face == 1:
-						# Both on ones: standard higher rule
 						return b.quantity > cur.quantity
 					else:
-						# Moving to ones: need at least ceil(current_quantity / 2)
-						import math
 						min_ones = math.ceil(cur.quantity / 2.0)
 						return b.quantity >= min_ones
-				# Moving away from ones: must at least double + 1
 				elif cur.face == 1:
 					min_quantity = cur.quantity * 2 + 1
 					return b.quantity >= min_quantity
-			
-			# Standard rule: quantity must be higher, or same quantity with higher face
+			# Standard rule
 			return (b.quantity > cur.quantity) or (b.quantity == cur.quantity and b.face > cur.face)
-
-		for q in range(1, total + 1):
-			for f in range(1, self.faces + 1):
-				b = Bid(q, f)
-				if is_higher(b):
-					actions.append(Action(kind='bid', bid=b))
-
-		# Challenge available only if there is a current bid
-		if self.state.current_bid is not None:
-			actions.append(Action(kind='challenge'))
-			if self.exact_call_enabled:
-				actions.append(Action(kind='exact'))
-
-		return actions
+		# Challenge legality
+		if action.kind == 'challenge':
+			return cur is not None
+		# Exact legality
+		if action.kind == 'exact':
+			return self.exact_call_enabled and cur is not None
+		return False
 
 	def _count_face(self, face: int) -> int:
 		assert self.state is not None
@@ -241,8 +230,9 @@ class LiarDiceEngine:
 		n = len(self.state.players)
 		return (idx - 1 + n) % n
 
-	def play_game(self, verbose: bool = True) -> str:
-		"""Runs until one player remains. Returns winner name."""
+
+	def play_game(self, verbose: bool = True, max_round_turns: int = 200) -> str:
+		"""Runs until one player remains. Returns winner name. Safeguard: max_round_turns per round."""
 		self.start_new_game()
 		assert self.state is not None
 
@@ -253,55 +243,68 @@ class LiarDiceEngine:
 				print(f"Dice per player: {self._format_dice_per_player()}")
 
 			# Round loop
+
+			turn_count = 0
 			while True:
+				turn_count += 1
+				if turn_count > max_round_turns:
+					# print(self.state.visible_summary_for(self.state.current_player_idx))
+					raise Exception(f"Warning: round {self.state.round_number} exceeded {max_round_turns} turns.")
+					
+
 				idx = self.state.current_player_idx
 				agent = self.state.players[idx].agent
-				legal = self.legal_actions()
+				agent_obj = agent if isinstance(agent, Agent) else Agent()
 				state_view = self.state.visible_summary_for(idx)
-				action = agent.decide(state_view)
+				action = agent_obj.decide(state_view)
+
+
+				state_view = self.state.visible_summary_for(idx)
+				action = agent_obj.decide(state_view)
+
+				if not self.is_action_legal(action):
+					# Force challenge if illegal action and a bid exists, else minimal legal bid
+					if self.state.current_bid is not None:
+						action = Action(kind='challenge')
+					else:
+						# Find minimal legal bid
+						for q in range(1, self.state.total_dice_in_play() + 1):
+							for f in range(1, self.faces + 1):
+								min_bid = Bid(q, f)
+								if self.is_action_legal(Action(kind='bid', bid=min_bid)):
+									action = Action(kind='bid', bid=min_bid)
+									break
+							else:
+								continue
+							break
 
 				if action.kind == 'bid':
-					# validate
-					if action.bid is None or action not in legal:
-						# Force challenge if a bid exists, else pick minimal legal bid
-						if self.state.current_bid is not None:
-							action = Action(kind='challenge')
-						else:
-							# minimal legal bid
-							min_bid = min((a.bid for a in legal if a.kind == 'bid' and a.bid is not None), key=lambda b: (b.quantity, b.face))
-							action = Action(kind='bid', bid=min_bid)
-					if action.kind == 'bid':
+					if isinstance(action.bid, Bid):
 						self._record_bid(idx, action.bid)
-					else:
-						# handled below as challenge
-						pass
 					if verbose:
-						print(f"{agent.name} bids {action.bid}")
+						print(f"{agent_obj.name} bids {action.bid}")
 					self.state.current_player_idx = self._next_player_idx(idx)
 				elif action.kind == 'challenge':
 					if self.state.current_bid is None:
 						raise ValueError("Challenge without a current bid")
 					if verbose:
-						print(f"{agent.name} calls Dudo (challenge)")
+						print(f"{agent_obj.name} calls Dudo (challenge)")
 					result = self._resolve_challenge(challenger_idx=idx)
 					self._print_resolution(result, actual=None, verbose=verbose)
 					self._post_resolution_cleanup(result)
 					break
 				elif action.kind == 'exact':
 					if not self.exact_call_enabled or self.state.current_bid is None:
-						# Force challenge instead when exact not allowed
 						action = Action(kind='challenge')
-						# fall through to challenge branch
 						if verbose:
-							print(f"{agent.name} calls Dudo (challenge)")
+							print(f"{agent_obj.name} calls Dudo (challenge)")
 						result = self._resolve_challenge(challenger_idx=idx)
 						self._print_resolution(result, actual=None, verbose=verbose)
 						self._post_resolution_cleanup(result)
 						break
 					if verbose:
-						print(f"{agent.name} calls Exact")
+						print(f"{agent_obj.name} calls Exact")
 					result = self._resolve_exact(idx)
-					# For exact we can compute actual for print
 					actual = self._count_face(self.state.current_bid.face) if self.state.current_bid else None
 					self._print_resolution(result, actual=actual, verbose=verbose)
 					self._post_resolution_cleanup(result)
@@ -309,27 +312,9 @@ class LiarDiceEngine:
 				else:
 					raise ValueError(f"Unknown action: {action.kind}")
 
-		# Winner
 		assert self.state is not None
 		winner = next(p.name for p in self.state.players if p.dice_remaining > 0)
 		if verbose:
 			print(f"\nWinner: {winner}")
 		self._emit("game_end", winner=winner)
 		return winner
-
-
-def demo_game() -> None:
-	from agents import RandomAgent, ConservativeAgent
-
-	engine = LiarDiceEngine(wild_ones=True, starting_dice=5)
-	engine.add_players([
-		RandomAgent("Alice"),
-		ConservativeAgent("Bob"),
-		RandomAgent("Cara"),
-	])
-	engine.play_game(verbose=True)
-
-
-if __name__ == "__main__":
-	demo_game()
-
