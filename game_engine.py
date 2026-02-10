@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import List, Optional, Sequence
 
-from models import Bid, Action, PlayerState, GameState, RoundResult
+from models import Bid, Action, PlayerState, GameState, RoundResult, RoundBid
 from agents import Agent
 
 
@@ -41,12 +41,14 @@ class LiarDiceEngine:
 			round_number=0,
 			faces=self.faces,
 			wild_ones=self.wild_ones,
+			round_bids=[],
 		)
 
 	def _begin_round(self) -> None:
 		assert self.state is not None
 		self.state.round_number += 1
 		self.state.current_bid = None
+		self.state.round_bids = []
 		# Roll dice
 		for p in self.state.players:
 			p.dice = self._roll_dice_for(p.dice_remaining)
@@ -156,6 +158,10 @@ class LiarDiceEngine:
 					if action.bid is None or action not in legal:
 						raise ValueError(f"Illegal bid by {agent.name}: {action}")
 					self.state.current_bid = action.bid
+					# Record bid in round history
+					self.state.round_bids.append(
+						RoundBid(player_idx=idx, player_name=self.state.players[idx].name, bid=action.bid)
+					)
 					if verbose:
 						print(f"{agent.name} bids {action.bid}")
 					self.state.current_player_idx = self._next_player_idx(idx)

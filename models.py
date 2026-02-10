@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,13 @@ class PlayerState:
     agent: object
 
 
+@dataclass(frozen=True)
+class RoundBid:
+    player_idx: int
+    player_name: str
+    bid: Bid
+
+
 @dataclass
 class GameState:
     players: List[PlayerState]
@@ -41,6 +48,7 @@ class GameState:
     round_number: int
     faces: int
     wild_ones: bool
+    round_bids: List[RoundBid]
 
     def total_dice_in_play(self) -> int:
         return sum(p.dice_remaining for p in self.players)
@@ -65,6 +73,14 @@ class GameState:
             'faces': self.faces,
             'wild_ones': self.wild_ones,
             'my_dice': list(self.players[player_idx].dice),
+            'round_bids': [
+                {
+                    'player_name': rb.player_name,
+                    'quantity': rb.bid.quantity,
+                    'face': rb.bid.face,
+                }
+                for rb in self.round_bids
+            ],
         }
 
 
