@@ -117,3 +117,21 @@ class RoundResult:
     revealed_counts: Dict[int, int]  # face -> count
     resolved_on: str  # 'challenge' | 'exact'
     bid: Optional[Bid]
+
+
+class Agent:
+    def __init__(self, name: str="Default Name"):
+        self.name = name
+
+    def decide(self, state_view: PublicState) -> Action:
+        """
+        Override to implement strategy. Receives a partial, public state view for
+        the active player with fields:
+          - players: PlayerPublic entries (name, dice_remaining, mine)
+          - current_bid: Bid or None
+          - round_number, faces, wild_ones
+          - my_dice: [int]
+          - round_bids: RoundBidPublic entries (player_name, quantity, face)
+        Must return one of the provided legal actions.
+        """
+        raise NotImplementedError
