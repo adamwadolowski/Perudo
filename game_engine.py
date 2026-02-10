@@ -151,7 +151,8 @@ class LiarDiceEngine:
 				idx = self.state.current_player_idx
 				agent = self.state.players[idx].agent
 				legal = self.legal_actions()
-				action = agent.decide(self.state, legal)
+				state_view = self.state.visible_summary_for(idx)
+				action = agent.decide(state_view, legal)
 
 				if action.kind == 'bid':
 					# validate

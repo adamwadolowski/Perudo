@@ -1,25 +1,32 @@
 from __future__ import annotations
 
 import random
-from typing import List, Sequence, Optional
+from typing import Sequence, Mapping, Any
 
-from models import Action, Bid, GameState
+from models import Action
 
 
 class Agent:
     def __init__(self, name: str):
         self.name = name
 
-    def decide(self, state: GameState, legal_actions: Sequence[Action]) -> Action:
+    def decide(self, state_view: Mapping[str, Any], legal_actions: Sequence[Action]) -> Action:
         """
-        Override to implement strategy. Receives a partial-observable state view 
-        and must return one of the provided legal actions.
+        Override to implement strategy. Receives a partial, public state view for
+        the active player with keys:
+          - players: [{ name, dice_remaining, mine }]
+          - current_player_idx
+          - current_bid: { quantity, face } or None
+          - round_number, faces, wild_ones
+          - my_dice: [int]
+          - round_bids: [{ player_name, quantity, face }]
+        Must return one of the provided legal actions.
         """
         raise NotImplementedError
 
 
 class RandomAgent(Agent):
-    def decide(self, state: GameState, legal_actions: Sequence[Action]) -> Action:
+    def decide(self, state_view: Mapping[str, Any], legal_actions: Sequence[Action]) -> Action:
         # Naive: prefer bids early, challenge sometimes
         bids = [a for a in legal_actions if a.kind == 'bid']
         others = [a for a in legal_actions if a.kind != 'bid']
@@ -32,16 +39,20 @@ class RandomAgent(Agent):
 class ConservativeAgent(Agent):
     """Challenges aggressively unless the bid is plausible given my dice."""
 
-    def decide(self, state: GameState, legal_actions: Sequence[Action]) -> Action:
+    def decide(self, state_view: Mapping[str, Any], legal_actions: Sequence[Action]) -> Action:
         # If can challenge, decide based on simple heuristic
         challenge = next((a for a in legal_actions if a.kind == 'challenge'), None)
         bids = [a for a in legal_actions if a.kind == 'bid']
-        if challenge and state.current_bid:
-            my_face_count = sum(1 for d in state.players[state.current_player_idx].dice if d == state.current_bid.face)
-            if state.wild_ones and state.current_bid.face != 1:
-                my_face_count += sum(1 for d in state.players[state.current_player_idx].dice if d == 1)
+        current_bid = state_view.get('current_bid')
+        if challenge and current_bid:
+            face = int(current_bid['face'])
+            my_dice = state_view.get('my_dice', [])
+            my_face_count = sum(1 for d in my_dice if d == face)
+            if state_view.get('wild_ones') and face != 1:
+                my_face_count += sum(1 for d in my_dice if d == 1)
             # If my expected contribution is very low relative to quantity, challenge
-            if my_face_count <= max(0, state.current_bid.quantity - 2):
+            quantity = int(current_bid['quantity'])
+            if my_face_count <= max(0, quantity - 2):
                 return challenge
         # Else bid minimally higher
         if bids:
